@@ -1,0 +1,117 @@
+*******         SQL-запросы:       ***********
+
+
+a. Выбрать имена (name) всех клиентов, которые не делали заказы в последние 7 дней.
+
+SELECT c.name
+FROM clients c
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM orders o
+    WHERE o.customer_id = c.id
+      AND o.order_date >= CURDATE() - INTERVAL 7 DAY
+);
+
+
+b. Выбрать имена (name) 5 клиентов, которые сделали больше всего заказов в магазине.
+
+SELECT c.name, COUNT(o.id) AS order_count
+FROM clients c
+JOIN orders o ON c.id = o.customer_id
+GROUP BY c.id, c.name
+ORDER BY order_count DESC
+LIMIT 5;
+
+
+c. Выбрать имена (name) 10 клиентов, которые сделали заказы на наибольшую сумму.
+Для этого запроса требуется дополнительная информация: в текущей структуре БД нет поля с суммой заказа. Предположим, что в таблице merchandise есть поле price (цена товара). Тогда запрос будет таким:
+
+SELECT c.name, SUM(m.price) AS total_amount
+FROM clients c
+JOIN orders o ON c.id = o.customer_id
+JOIN merchandise m ON o.item_id = m.id
+GROUP BY c.id, c.name
+ORDER BY total_amount DESC
+LIMIT 10;
+
+d. Выбрать имена (name) всех товаров, по которым не было доставленных заказов (со статусом “complete”).
+SELECT m.name
+FROM merchandise m
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM orders o
+    WHERE o.item_id = m.id
+      AND o.status = 'complete'
+);
+
+
+****************************************************************************
+
+Для больших таблиц можно добавить ИНДЕКСЫ НА ПОЛЯ:
+orders.customer_id
+orders.item_id
+orders.order_date
+orders.status
+
+Для запроса a. Выбрать имена (name) всех клиентов, которые не делали заказы в последние 7 дней:
+
+CREATE INDEX idx_orders_customer_date ON orders(customer_id, order_date);
+Ускоряет поиск заказов по customer_id и order_date.
+Позволяет эффективно выполнять условие order_date >= CURRENT_DATE - INTERVAL 7 DAY.
+Композитный индекс (два поля) работает лучше, чем отдельные индексы, так как покрывает оба условия в подзапросе.
+Оптимизирует работу подзапроса EXISTS, который выполняется для каждого клиента.
+
+
+Для запроса b. Выбрать имена (name) 5 клиентов, которые сделали больше всего заказов в магазине:
+
+CREATE INDEX idx_orders_customer_id ON orders(customer_id);
+Ускоряет операцию JOIN между таблицами clients и orders по полю customer_id.
+Помогает при группировке GROUP BY c.id, c.name — оптимизатор может использовать индекс для быстрой агрегации.
+Уменьшает необходимость полного сканирования таблицы orders.
+
+
+Для запроса c. Выбрать имена (name) 10 клиентов, которые сделали заказы на наибольшую сумму:
+	Основной индекс для JOIN и группировки
+CREATE INDEX idx_orders_customer_item ON orders(customer_id, item_id);
+
+	Индекс для таблицы merchandise (если много товаров)
+CREATE INDEX idx_merchandise_price ON merchandise(price);
+
+
+idx_orders_customer_item:
+Покрывает оба поля, используемых в JOIN (customer_id, item_id).
+Ускоряет соединение таблиц и группировку.
+Позволяет быстро находить все заказы конкретного клиента и связанные с ними товары.
+
+idx_merchandise_price:
+Полезен, если нужно отсортировать товары по цене или выполнить дополнительные фильтрации.
+В данном запросе менее критичен, но может помочь при больших объёмах данных.
+
+
+Для запроса d. Выбрать имена (name) всех товаров, по которым не было доставленных заказов (со статусом “complete”):
+
+CREATE INDEX idx_orders_item_status ON orders(item_id, status);
+Покрывает оба условия в подзапросе: item_id = m.id и status = 'complete'.
+Ускоряет проверку существования заказов с нужным статусом для каждого товара.
+Композитный индекс эффективнее отдельных индексов по item_id и status.
+Оптимизирует работу NOT EXISTS — оптимизатор может быстро проверить, есть ли записи с status = 'complete' для конкретного товара.
+
+**************************
+
+ПОКРЫВАЮЩИЕ ИНДЕКСЫ (Covering Indexes)
+Для максимальной производительности можно создать покрывающие индексы, включающие все поля, используемые в запросе:
+
+	Для запроса b: включает поле name из clients для избежания дополнительного чтения
+CREATE INDEX idx_clients_id_name ON clients(id, name);
+
+	Для запроса c: включает price для быстрой агрегации
+CREATE INDEX idx_merchandise_id_price ON merchandise(id, price);
+
+
+ЧАСТИЧНЫЕ ИНДЕКСЫ (Partial Indexes)
+Если большинство заказов имеют статус 'new', а 'complete' — редкость, можно создать частичный индекс:
+
+sql
+CREATE INDEX idx_orders_complete ON orders(item_id)
+WHERE status = 'complete';
+Это уменьшит размер индекса и ускорит поиск именно по статусу 'complete'.
